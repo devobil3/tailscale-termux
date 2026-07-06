@@ -36,6 +36,19 @@ warn()    { echo -e "${YELLOW}[WARN]${RESET} $*"; }
 die()     { echo -e "${RED}[ERROR]${RESET} $*" >&2; exit 1; }
 header()  { echo -e "\n${BOLD}━━━  $*  ━━━${RESET}"; }
 
+# Helper to read from TTY if stdin is redirected (e.g. curl ... | bash)
+read_interactive() {
+    local prompt="$1"
+    local var_name="$2"
+    if [ -t 0 ]; then
+        read -rp "$prompt" "$var_name"
+    elif [ -c /dev/tty ]; then
+        read -rp "$prompt" "$var_name" < /dev/tty
+    else
+        eval "$var_name=''"
+    fi
+}
+
 # Determine Tailscale Hostname
 if [ -z "${TS_HOSTNAME}" ]; then
     # Try using HOSTNAME env var, but ignore if it is empty, 'localhost', or '127.0.0.1'
@@ -53,7 +66,7 @@ if [ -z "${TS_HOSTNAME}" ]; then
         DEFAULT_HOSTNAME="termux-server-$(shuf -i 1000-9999 -n 1)"
     fi
     info "No TS_HOSTNAME environment variable provided."
-    read -rp "Enter tailscale hostname to use (Press ENTER for default '$DEFAULT_HOSTNAME'): " USER_INPUT
+    read_interactive "Enter tailscale hostname to use (Press ENTER for default '$DEFAULT_HOSTNAME'): " USER_INPUT
     if [ -n "$USER_INPUT" ]; then
         TS_HOSTNAME=$(echo "$USER_INPUT" | tr -cd '[:alnum:]-' | tr '[:upper:]' '[:lower:]')
     else
@@ -155,7 +168,7 @@ echo "Run the following command and open the printed URL in a browser:"
 echo ""
 echo -e "  ${BOLD}tailscale-cli up --hostname=$TS_HOSTNAME${RESET}"
 echo ""
-read -rp "Press ENTER to run this now, or Ctrl-C to skip and run manually later..."
+read_interactive "Press ENTER to run this now, or Ctrl-C to skip and run manually later..." DUMMY_VAR
 tailscale-cli up --hostname="$TS_HOSTNAME" || warn "If it timed out, re-run: tailscale-cli up --hostname=$TS_HOSTNAME"
 
 # ════════════════════════════════════════════════════════════════════
