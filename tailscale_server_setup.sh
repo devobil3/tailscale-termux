@@ -167,11 +167,32 @@ echo ""
 echo -e "  ${BOLD}tailscale-cli up --hostname=$HOSTNAME${RESET}"
 echo ""
 read_interactive "Press ENTER to run this now, or Ctrl-C to skip and run manually later..." DUMMY_VAR
-info "Executing: tailscale-cli up --hostname=$HOSTNAME"
-if tailscale-cli up --hostname="$HOSTNAME"; then
-    success "Tailscale connection check completed successfully."
+IS_CONNECTED=false
+if tailscale-cli status &>/dev/null; then
+    IS_CONNECTED=true
+fi
+
+if [ "$IS_CONNECTED" = true ]; then
+    info "Tailscale is already authenticated."
+    read_interactive "Force re-authentication to get a new login URL? [y/N]: " FORCE_REAUTH_CHOICE
+    if [[ "$FORCE_REAUTH_CHOICE" =~ ^[Yy] ]]; then
+        info "Executing: tailscale-cli up --hostname=$HOSTNAME --force-reauth"
+        tailscale-cli up --hostname="$HOSTNAME" --force-reauth || warn "If it timed out, re-run manually: tailscale-cli up --hostname=$HOSTNAME --force-reauth"
+    else
+        info "Executing: tailscale-cli up --hostname=$HOSTNAME"
+        if tailscale-cli up --hostname="$HOSTNAME"; then
+            success "Tailscale hostname updated silently."
+        else
+            warn "Tailscale command failed. Re-run manually: tailscale-cli up --hostname=$HOSTNAME"
+        fi
+    fi
 else
-    warn "Tailscale command failed. If it timed out, please re-run manually: tailscale-cli up --hostname=$HOSTNAME"
+    info "Executing: tailscale-cli up --hostname=$HOSTNAME"
+    if tailscale-cli up --hostname="$HOSTNAME"; then
+        success "Tailscale connection check completed successfully."
+    else
+        warn "Tailscale command failed. If it timed out, please re-run manually: tailscale-cli up --hostname=$HOSTNAME"
+    fi
 fi
 
 # ════════════════════════════════════════════════════════════════════
