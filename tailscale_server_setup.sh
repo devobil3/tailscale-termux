@@ -241,6 +241,7 @@ PrintMotd no
 AcceptEnv LANG LC_*
 AllowTcpForwarding yes
 GatewayPorts yes
+Banner /root/.tailscale/ssh_banner
 SSHD_EOF
             cat > /root/.tmux.conf <<'TMUX_EOF'
 # Increase scrollback history limit
@@ -264,6 +265,8 @@ set -g status-right '#[fg=yellow]%Y-%m-%d %H:%M '
 TMUX_EOF
             echo 'Set a root password (used to SSH in from Android B):'
             passwd root
+            mkdir -p /root/.tailscale
+            echo "[TS-SSH] user=root port=${SSH_PORT}" > /root/.tailscale/ssh_banner
         " || { warn "Failed to configure SSH and tmux inside proot-distro. Skipping."; SSH_MODE="skip"; }
         [ "$SSH_MODE" = "proot" ] && success "OpenSSH configured inside $DISTRO on port $SSH_PORT."
     fi
@@ -290,8 +293,12 @@ PrintMotd no
 AcceptEnv LANG LC_*
 AllowTcpForwarding yes
 GatewayPorts yes
+Banner $HOME/.tailscale/ssh_banner
 Subsystem sftp $PREFIX/libexec/sftp-server
 EOF
+
+    mkdir -p "$HOME/.tailscale"
+    echo "[TS-SSH] user=$(whoami) port=$SSH_PORT" > "$HOME/.tailscale/ssh_banner"
 
     success "OpenSSH configured in Termux on port $SSH_PORT."
     echo ""
@@ -324,6 +331,9 @@ if pgrep -f "sshd" &>/dev/null; then
     exit 0
 fi
 
+mkdir -p "\$HOME/.tailscale"
+echo "[TS-SSH] user=\$(whoami) port=\$SSH_PORT" > "\$HOME/.tailscale/ssh_banner"
+
 echo "Starting Termux sshd on port \$SSH_PORT..."
 nohup sshd -D -p "\$SSH_PORT" >> "\$LOG" 2>&1 &
 sleep 2
@@ -355,6 +365,8 @@ if pgrep -f "sshd -D" &>/dev/null; then
     echo "sshd is already running."
     exit 0
 fi
+
+proot-distro login "\$DISTRO" -- bash -c "mkdir -p /root/.tailscale && echo '[TS-SSH] user=root port=\$SSH_PORT' > /root/.tailscale/ssh_banner"
 
 echo "Starting sshd inside \$DISTRO on port \$SSH_PORT..."
 nohup proot-distro login "\$DISTRO" -- /usr/sbin/sshd -D -p "\$SSH_PORT" >> "\$LOG" 2>&1 &
