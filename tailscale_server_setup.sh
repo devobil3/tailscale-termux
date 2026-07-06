@@ -390,7 +390,113 @@ else
 fi
 
 # ════════════════════════════════════════════════════════════════════
-header "Step 8: Configure tmux (Termux Host)"
+header "Step 8: Enable Auto-Start via termux-services"
+# ════════════════════════════════════════════════════════════════════
+AUTO_START_ENABLED=false
+
+read_interactive "Enable automatic service startup for Tailscale and SSH via termux-services? [Y/n]: " AUTO_START_CHOICE
+if [[ -z "$AUTO_START_CHOICE" || "$AUTO_START_CHOICE" =~ ^[Yy] ]]; then
+    if ! command -v service-daemon &>/dev/null; then
+        warn "termux-services is not fully installed. Trying to install..."
+        pkg install -y -q termux-services runit || true
+    fi
+
+    if command -v service-daemon &>/dev/null; then
+        info "Enabling tailscaled in termux-services..."
+        sv-enable tailscaled || warn "Failed to enable tailscaled service"
+
+        if [ "$SSH_MODE" = "termux" ]; then
+            info "Enabling native sshd in termux-services..."
+            sv-enable sshd || warn "Failed to enable sshd service"
+            AUTO_START_ENABLED=true
+        elif [ "$SSH_MODE" = "proot" ]; then
+            info "Setting up custom proot-sshd service in termux-services..."
+            PROOT_SERVICE_DIR="$PREFIX/var/service/proot-sshd"
+            mkdir -p "$PROOT_SERVICE_DIR/log"
+
+            # Create proot-sshd/run
+            cat > "$PROOT_SERVICE_DIR/run" <<RUN_EOF
+#!/data/data/com.termux/files/usr/bin/sh
+exec 2>&1
+export HOME=$HOME
+exec proot-distro login "$DISTRO" -- /usr/sbin/sshd -D -p "$SSH_PORT"
+RUN_EOF
+            chmod +x "$PROOT_SERVICE_DIR/run"
+
+            # Create proot-sshd/log/run
+            cat > "$PROOT_SERVICE_DIR/log/run" <<'LOG_EOF'
+#!/data/data/com.termux/files/usr/bin/sh
+pwd=${PWD%/*}
+service=${pwd##*/}
+mkdir -p "$LOGDIR/sv/$service"
+exec svlogd -tt "$LOGDIR/sv/$service"
+LOG_EOF
+            chmod +x "$PROOT_SERVICE_DIR/log/run"
+
+            info "Enabling proot-sshd in termux-services..."
+            sv-enable proot-sshd || warn "Failed to enable proot-sshd service"
+            AUTO_START_ENABLED=true
+        else
+            warn "SSH mode is skip. Only tailscaled was enabled."
+        fi
+    else
+        warn "service-daemon is not available. Skipping termux-services setup."
+    fi
+else
+    info "Skipping termux-services auto-start configuration."
+fi
+
+# ════════════════════════════════════════════════════════════════════
+header "Step 9: Configure Auto-Start on Boot (Termux:Boot)"
+# ════════════════════════════════════════════════════════════════════
+BOOT_SCRIPT_CREATED=false
+
+read_interactive "Configure auto-start on device reboot (requires Termux:Boot app)? [Y/n]: " BOOT_CHOICE
+if [[ -z "$BOOT_CHOICE" || "$BOOT_CHOICE" =~ ^[Yy] ]]; then
+    BOOT_DIR="$HOME/.termux/boot"
+    mkdir -p "$BOOT_DIR"
+    BOOT_SCRIPT="$BOOT_DIR/start-tailscale-ssh"
+
+    cat > "$BOOT_SCRIPT" <<'BOOT_EOF'
+#!/data/data/com.termux/files/usr/bin/bash
+# Auto-start Tailscale and SSH on phone boot via Termux:Boot
+
+# Acquire a wake-lock so the device doesn't sleep in background
+if [ -x /data/data/com.termux/files/usr/bin/termux-wake-lock ]; then
+    /data/data/com.termux/files/usr/bin/termux-wake-lock
+fi
+
+# Give Android a moment to settle network connectivity on boot
+sleep 5
+
+# Start services if termux-services is installed
+if [ -x /data/data/com.termux/files/usr/bin/service-daemon ]; then
+    export SVDIR=/data/data/com.termux/files/usr/var/service
+    export LOGDIR=/data/data/com.termux/files/usr/var/log
+    /data/data/com.termux/files/usr/bin/service-daemon start
+else
+    # Fallback to direct background execution if termux-services is not available
+    if [ -x /data/data/com.termux/files/usr/bin/tailscaled-start ]; then
+        /data/data/com.termux/files/usr/bin/tailscaled-start >/dev/null 2>&1
+    fi
+    if [ -x /data/data/com.termux/files/usr/bin/termux-sshd-start ]; then
+        /data/data/com.termux/files/usr/bin/termux-sshd-start >/dev/null 2>&1
+    fi
+    if [ -x /data/data/com.termux/files/usr/bin/proot-sshd-start ]; then
+        /data/data/com.termux/files/usr/bin/proot-sshd-start >/dev/null 2>&1
+    fi
+fi
+BOOT_EOF
+
+    chmod +x "$BOOT_SCRIPT"
+    BOOT_SCRIPT_CREATED=true
+    success "Boot script configured at: $BOOT_SCRIPT"
+else
+    info "Skipping Termux:Boot configuration."
+fi
+
+# ════════════════════════════════════════════════════════════════════
+header "Step 10: Configure tmux (Termux Host)"
 # ════════════════════════════════════════════════════════════════════
 TMUX_CONF="$HOME/.tmux.conf"
 if [ ! -f "$TMUX_CONF" ] || ! grep -q "Tailscale setup optimizations" "$TMUX_CONF" 2>/dev/null; then
@@ -423,7 +529,7 @@ else
 fi
 
 # ════════════════════════════════════════════════════════════════════
-header "Step 9: Summary"
+header "Step 11: Summary"
 # ════════════════════════════════════════════════════════════════════
 sleep 2
 TAILSCALE_IP=$(tailscale-cli ip -4 2>/dev/null | head -1 || echo "<not yet authenticated>")
@@ -446,20 +552,36 @@ echo -e "  SOCKS5 Proxy   : ${BOLD}127.0.0.1:${SOCKS5_PORT}${RESET}"
 echo -e "  SSH Mode       : ${BOLD}${SSH_MODE}${RESET}"
 echo -e "  SSH Port       : ${BOLD}${SSH_PORT}${RESET}"
 [ "$SSH_MODE" = "proot" ] && echo -e "  proot-distro   : ${BOLD}${DISTRO}${RESET}"
+echo -e "  Auto-Start     : ${BOLD}$([ "$AUTO_START_ENABLED" = true ] && echo "Enabled (termux-services)" || echo "Disabled")${RESET}"
+echo -e "  Boot Auto-Start: ${BOLD}$([ "$BOOT_SCRIPT_CREATED" = true ] && echo "Configured (~/.termux/boot)" || echo "Disabled")${RESET}"
 echo ""
-echo -e "${BOLD}Next steps on Android A:${RESET}"
-echo "  1. Start SSH server:  $SSH_LAUNCHER"
-echo "  2. Keep Termux open or enable auto-start: tailscaled-start --service=on"
+echo -e "${BOLD}Status & Management:${RESET}"
+if [ "$AUTO_START_ENABLED" = true ]; then
+    echo "  Services are managed automatically by termux-services."
+    if [ "$SSH_MODE" = "termux" ]; then
+        echo "  - Check status: sv status tailscaled sshd"
+        echo "  - Restart:      sv restart tailscaled sshd"
+    elif [ "$SSH_MODE" = "proot" ]; then
+        echo "  - Check status: sv status tailscaled proot-sshd"
+        echo "  - Restart:      sv restart tailscaled proot-sshd"
+    fi
+else
+    echo "  Start manually using:"
+    echo "    tailscaled-start"
+    echo "    $SSH_LAUNCHER"
+fi
 echo ""
-echo -e "${BOLD}On Android B:${RESET}"
+if [ "$BOOT_SCRIPT_CREATED" = true ]; then
+    echo -e "${YELLOW}${BOLD}⚠  ACTION REQUIRED to survive phone reboots:${RESET}"
+    echo "  1. Install \"Termux:Boot\" app on this device (available on F-Droid)."
+    echo "  2. Launch the \"Termux:Boot\" app once to register it with the OS."
+    echo "  3. The boot script will then execute automatically on every restart."
+    echo ""
+fi
+echo -e "${BOLD}On Android B (Client):${RESET}"
 echo "  1. Run client setup:      bash tailscale_client_setup.sh"
 echo "  2. Then SSH in:           ssh -p ${SSH_PORT} ${SSH_TARGET}"
 echo ""
 echo -e "  Tailscale logs : ${BOLD}cat ~/.tailscale/tailscaled.log${RESET}"
 echo -e "  SSH logs       : ${BOLD}cat $SSH_LOG${RESET}"
 echo ""
-if [ "$SSH_MODE" = "skip" ]; then
-    echo -e "${YELLOW}[NOTE] SSH server was not configured. To add it later:${RESET}"
-    echo "  Termux SSH:  pkg install openssh && sshd -p 8022"
-    echo "  proot SSH:   SSH_MODE=proot DISTRO=ubuntu bash tailscale_server_setup.sh"
-fi

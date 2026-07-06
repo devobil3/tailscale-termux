@@ -314,21 +314,35 @@ ssh -p 8022 -N -f -L 5432:localhost:5432 user@100.x.x.x
 
 ## Auto-Start
 
+The setup script `tailscale_server_setup.sh` offers to configure auto-start automatically.
+
+### 1 — Auto-Start on Termux Shell Open
+
+Using `termux-services` (runit supervisor), services are started automatically in the background whenever you open a Termux session.
+
 ```bash
-# Add to ~/.bashrc on any device to start Tailscale on every Termux session
-echo 'if ! pgrep -f "tailscaled.*statedir" > /dev/null 2>&1; then tailscaled-start > /dev/null 2>&1; fi' >> ~/.bashrc
+# Enable Tailscale and native SSH daemon
+sv-enable tailscaled
+sv-enable sshd
 
-# Auto-start sshd on server devices (add after the Tailscale line)
-echo 'if ! pgrep -f "sshd -D" > /dev/null 2>&1; then termux-sshd-start > /dev/null 2>&1; fi' >> ~/.bashrc
+# Or for proot-distro SSH mode:
+sv-enable tailscaled
+sv-enable proot-sshd
 
-# Or use termux-services for proper service management
-tailscaled-start --service=on      # Enable
-tailscaled-start --service=status  # Check status
-tailscaled-start --service=off     # Disable
+# Check status of the services
+sv status tailscaled sshd
 ```
 
-> [!NOTE]
-> termux-services uses runit. Keep at least one Termux session open so `runsvdir` stays alive.
+### 2 — Auto-Start on Phone Restart (Termux:Boot)
+
+To make your server survive phone restarts without manually opening Termux:
+
+1. Enable the services via `termux-services` as described above (or let the setup script do it).
+2. Install the **Termux:Boot** application from F-Droid or GitHub.
+3. Open the **Termux:Boot** application once to register it with the OS.
+4. The setup script creates a boot script at `~/.termux/boot/start-tailscale-ssh` which:
+   - Acquires a wake lock (`termux-wake-lock`) to keep the CPU awake.
+   - Starts the `service-daemon` which brings up all enabled services.
 
 ---
 
