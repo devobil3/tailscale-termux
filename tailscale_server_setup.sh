@@ -167,7 +167,12 @@ echo ""
 echo -e "  ${BOLD}tailscale-cli up --hostname=$HOSTNAME${RESET}"
 echo ""
 read_interactive "Press ENTER to run this now, or Ctrl-C to skip and run manually later..." DUMMY_VAR
-tailscale-cli up --hostname="$HOSTNAME" || warn "If it timed out, re-run: tailscale-cli up --hostname=$HOSTNAME"
+info "Executing: tailscale-cli up --hostname=$HOSTNAME"
+if tailscale-cli up --hostname="$HOSTNAME"; then
+    success "Tailscale connection check completed successfully."
+else
+    warn "Tailscale command failed. If it timed out, please re-run manually: tailscale-cli up --hostname=$HOSTNAME"
+fi
 
 # ════════════════════════════════════════════════════════════════════
 header "Step 6: Install and configure SSH server (mode: $SSH_MODE)"
