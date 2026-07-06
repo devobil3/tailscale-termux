@@ -233,6 +233,11 @@ All tmux commands start with the prefix `Ctrl-b` (press and release), then:
 - `aggressive-resize on` — window size follows the active client
 - `renumber-windows on` — gaps auto-close when a window is closed
 - Sleek dark status bar showing session name and clock
+- **`tmux-resurrect` & `tmux-continuum` integration**:
+  - Automatically saves the tmux environment (including pane layout, working directories, and running processes) every 15 minutes.
+  - Automatically restores your last saved state whenever the tmux server is launched (e.g. after a phone reboot, after Termux is force closed, or when you connect via `ts-connect`).
+  - **Manual Save**: `Ctrl-b` followed by `Ctrl-s`
+  - **Manual Restore**: `Ctrl-b` followed by `Ctrl-r`
 
 ---
 

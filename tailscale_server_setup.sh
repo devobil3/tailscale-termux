@@ -80,7 +80,7 @@ info "Updating package lists..."
 pkg update -y -q
 
 info "Installing required Termux packages..."
-pkg install -y -q curl wget grep dpkg termux-services runit tmux 2>/dev/null || true
+pkg install -y -q curl wget grep dpkg termux-services runit tmux git 2>/dev/null || true
 apt --fix-broken install -y -q 2>/dev/null || true
 
 # ════════════════════════════════════════════════════════════════════
@@ -212,17 +212,17 @@ if [ "$SSH_MODE" = "proot" ]; then
         warn "Then re-run: SSH_MODE=proot DISTRO=$DISTRO bash tailscale_server_setup.sh"
         SSH_MODE="skip"
     else
-        info "Installing openssh-server and tmux inside proot-distro ($DISTRO)..."
+        info "Installing openssh-server, tmux, and git inside proot-distro ($DISTRO)..."
         proot-distro login "$DISTRO" -- bash -c "
             set -e
             if command -v apt &>/dev/null; then
                 export DEBIAN_FRONTEND=noninteractive
                 apt-get update -q
-                apt-get install -y -q openssh-server sudo tmux
+                apt-get install -y -q openssh-server sudo tmux git
             elif command -v dnf &>/dev/null; then
-                dnf install -y -q openssh-server sudo tmux
+                dnf install -y -q openssh-server sudo tmux git
             elif command -v pacman &>/dev/null; then
-                pacman -Sy --noconfirm openssh sudo tmux
+                pacman -Sy --noconfirm openssh sudo tmux git
             else
                 echo 'ERROR: No supported package manager found.'
                 exit 1
@@ -262,7 +262,19 @@ set -g status-fg white
 set -g status-left-length 30
 set -g status-left '#[fg=green][#S] '
 set -g status-right '#[fg=yellow]%Y-%m-%d %H:%M '
+
+# --- Tmux Resurrect & Continuum ---
+run-shell ~/.tmux/plugins/tmux-resurrect/resurrect.tmux
+run-shell ~/.tmux/plugins/tmux-continuum/continuum.tmux
+set -g @continuum-restore 'on'
+set -g @resurrect-capture-pane-contents 'on'
+set -g @resurrect-processes 'ssh mysql psql sqlite3 htop top man less tail watch "~python" "~node"'
+set -g @resurrect-delete-backup-after '7'
+set-hook -g after-save-environment 'run-shell "ls -t ~/.tmux/resurrect/tmux_resurrect_*.txt 2>/dev/null | tail -n +21 | xargs rm -f"'
 TMUX_EOF
+            mkdir -p /root/.tmux/plugins
+            [ ! -d /root/.tmux/plugins/tmux-resurrect ] && git clone --quiet https://github.com/tmux-plugins/tmux-resurrect /root/.tmux/plugins/tmux-resurrect || true
+            [ ! -d /root/.tmux/plugins/tmux-continuum ] && git clone --quiet https://github.com/tmux-plugins/tmux-continuum /root/.tmux/plugins/tmux-continuum || true
             echo 'Set a root password (used to SSH in from Android B):'
             passwd root
             mkdir -p /root/.tailscale
@@ -526,6 +538,31 @@ TMUX_EOF
     success "tmux configuration updated on Termux host."
 else
     success "tmux configuration already optimized on Termux host."
+fi
+
+# Configure tmux-resurrect & tmux-continuum for session survival
+info "Installing tmux plugins (tmux-resurrect and tmux-continuum)..."
+mkdir -p "$HOME/.tmux/plugins"
+if [ ! -d "$HOME/.tmux/plugins/tmux-resurrect" ]; then
+    git clone --quiet https://github.com/tmux-plugins/tmux-resurrect "$HOME/.tmux/plugins/tmux-resurrect" || warn "Failed to clone tmux-resurrect"
+fi
+if [ ! -d "$HOME/.tmux/plugins/tmux-continuum" ]; then
+    git clone --quiet https://github.com/tmux-plugins/tmux-continuum "$HOME/.tmux/plugins/tmux-continuum" || warn "Failed to clone tmux-continuum"
+fi
+
+if ! grep -q "tmux-resurrect/resurrect.tmux" "$TMUX_CONF" 2>/dev/null; then
+    info "Adding plugin configuration to $TMUX_CONF..."
+    cat >> "$TMUX_CONF" << 'TMUX_EOF'
+
+# --- Tmux Resurrect & Continuum ---
+run-shell ~/.tmux/plugins/tmux-resurrect/resurrect.tmux
+run-shell ~/.tmux/plugins/tmux-continuum/continuum.tmux
+set -g @continuum-restore 'on'
+set -g @resurrect-capture-pane-contents 'on'
+set -g @resurrect-processes 'ssh mysql psql sqlite3 htop top man less tail watch "~python" "~node"'
+set -g @resurrect-delete-backup-after '7'
+set-hook -g after-save-environment 'run-shell "ls -t ~/.tmux/resurrect/tmux_resurrect_*.txt 2>/dev/null | tail -n +21 | xargs rm -f"'
+TMUX_EOF
 fi
 
 # ════════════════════════════════════════════════════════════════════
