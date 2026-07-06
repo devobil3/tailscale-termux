@@ -267,14 +267,59 @@ set -g status-right '#[fg=yellow]%Y-%m-%d %H:%M '
 run-shell ~/.tmux/plugins/tmux-resurrect/resurrect.tmux
 run-shell ~/.tmux/plugins/tmux-continuum/continuum.tmux
 set -g @continuum-restore 'on'
+set -g @continuum-save-interval '0'
 set -g @resurrect-capture-pane-contents 'on'
 set -g @resurrect-processes 'ssh mysql psql sqlite3 htop top man less tail watch "~python" "~node"'
-set -g @resurrect-delete-backup-after '7'
-set-hook -g after-save-environment 'run-shell "ls -t ~/.tmux/resurrect/tmux_resurrect_*.txt 2>/dev/null | tail -n +21 | xargs rm -f"'
+run-shell -b ~/.tailscale/tmux-smart-backup.sh
 TMUX_EOF
             mkdir -p /root/.tmux/plugins
             [ ! -d /root/.tmux/plugins/tmux-resurrect ] && git clone --quiet https://github.com/tmux-plugins/tmux-resurrect /root/.tmux/plugins/tmux-resurrect || true
             [ ! -d /root/.tmux/plugins/tmux-continuum ] && git clone --quiet https://github.com/tmux-plugins/tmux-continuum /root/.tmux/plugins/tmux-continuum || true
+            
+            # Create smart backup script inside proot
+            mkdir -p /root/.tailscale
+            cat > /root/.tailscale/tmux-smart-backup.sh <<'BACKUP_EOF'
+#!/usr/bin/env bash
+# Smart adaptive backup for tmux using exponential backoff.
+# Active: backup every ~1 min | Idle: backoff to 30 min | Max: 60 backups
+# Detection: reads session_activity timestamp (single integer, near-zero cost)
+RESURRECT_DIR="$HOME/.tmux/resurrect"
+MIN_INTERVAL=60
+MAX_INTERVAL=1800
+CURRENT_INTERVAL=$MIN_INTERVAL
+LAST_ACTIVITY_TS=0
+
+mkdir -p "$RESURRECT_DIR"
+
+while true; do
+    sleep "$CURRENT_INTERVAL"
+
+    # Exit if tmux server is gone
+    if ! tmux info >/dev/null 2>&1; then
+        exit 0
+    fi
+
+    # Single cheap query: last user-input timestamp across all sessions
+    LATEST_ACTIVITY=$(tmux list-sessions -F '#{session_activity}' 2>/dev/null | sort -rn | head -1)
+    [ -z "$LATEST_ACTIVITY" ] && continue
+
+    if [ "$LATEST_ACTIVITY" != "$LAST_ACTIVITY_TS" ]; then
+        # User was active since last check — backup and reset to fast polling
+        LAST_ACTIVITY_TS="$LATEST_ACTIVITY"
+        CURRENT_INTERVAL=$MIN_INTERVAL
+        if [ -f "$HOME/.tmux/plugins/tmux-resurrect/scripts/save.sh" ]; then
+            tmux run-shell "$HOME/.tmux/plugins/tmux-resurrect/scripts/save.sh" >/dev/null 2>&1
+            ls -t "$RESURRECT_DIR"/tmux_resurrect_*.txt 2>/dev/null | tail -n +61 | xargs rm -f
+        fi
+    else
+        # No activity — exponential backoff (1m -> 2m -> 4m -> ... -> 30m cap)
+        CURRENT_INTERVAL=$((CURRENT_INTERVAL * 2))
+        [ $CURRENT_INTERVAL -gt $MAX_INTERVAL ] && CURRENT_INTERVAL=$MAX_INTERVAL
+    fi
+done
+BACKUP_EOF
+            chmod +x /root/.tailscale/tmux-smart-backup.sh
+
             echo 'Set a root password (used to SSH in from Android B):'
             passwd root
             mkdir -p /root/.tailscale
@@ -550,6 +595,51 @@ if [ ! -d "$HOME/.tmux/plugins/tmux-continuum" ]; then
     git clone --quiet https://github.com/tmux-plugins/tmux-continuum "$HOME/.tmux/plugins/tmux-continuum" || warn "Failed to clone tmux-continuum"
 fi
 
+# Create smart backup script on Termux Host
+info "Creating smart backup script..."
+mkdir -p "$HOME/.tailscale"
+cat > "$HOME/.tailscale/tmux-smart-backup.sh" <<'BACKUP_EOF'
+#!/usr/bin/env bash
+# Smart adaptive backup for tmux using exponential backoff.
+# Active: backup every ~1 min | Idle: backoff to 30 min | Max: 60 backups
+# Detection: reads session_activity timestamp (single integer, near-zero cost)
+RESURRECT_DIR="$HOME/.tmux/resurrect"
+MIN_INTERVAL=60
+MAX_INTERVAL=1800
+CURRENT_INTERVAL=$MIN_INTERVAL
+LAST_ACTIVITY_TS=0
+
+mkdir -p "$RESURRECT_DIR"
+
+while true; do
+    sleep "$CURRENT_INTERVAL"
+
+    # Exit if tmux server is gone
+    if ! tmux info >/dev/null 2>&1; then
+        exit 0
+    fi
+
+    # Single cheap query: last user-input timestamp across all sessions
+    LATEST_ACTIVITY=$(tmux list-sessions -F '#{session_activity}' 2>/dev/null | sort -rn | head -1)
+    [ -z "$LATEST_ACTIVITY" ] && continue
+
+    if [ "$LATEST_ACTIVITY" != "$LAST_ACTIVITY_TS" ]; then
+        # User was active since last check — backup and reset to fast polling
+        LAST_ACTIVITY_TS="$LATEST_ACTIVITY"
+        CURRENT_INTERVAL=$MIN_INTERVAL
+        if [ -f "$HOME/.tmux/plugins/tmux-resurrect/scripts/save.sh" ]; then
+            tmux run-shell "$HOME/.tmux/plugins/tmux-resurrect/scripts/save.sh" >/dev/null 2>&1
+            ls -t "$RESURRECT_DIR"/tmux_resurrect_*.txt 2>/dev/null | tail -n +61 | xargs rm -f
+        fi
+    else
+        # No activity — exponential backoff (1m -> 2m -> 4m -> ... -> 30m cap)
+        CURRENT_INTERVAL=$((CURRENT_INTERVAL * 2))
+        [ $CURRENT_INTERVAL -gt $MAX_INTERVAL ] && CURRENT_INTERVAL=$MAX_INTERVAL
+    fi
+done
+BACKUP_EOF
+chmod +x "$HOME/.tailscale/tmux-smart-backup.sh"
+
 if ! grep -q "tmux-resurrect/resurrect.tmux" "$TMUX_CONF" 2>/dev/null; then
     info "Adding plugin configuration to $TMUX_CONF..."
     cat >> "$TMUX_CONF" << 'TMUX_EOF'
@@ -558,10 +648,10 @@ if ! grep -q "tmux-resurrect/resurrect.tmux" "$TMUX_CONF" 2>/dev/null; then
 run-shell ~/.tmux/plugins/tmux-resurrect/resurrect.tmux
 run-shell ~/.tmux/plugins/tmux-continuum/continuum.tmux
 set -g @continuum-restore 'on'
+set -g @continuum-save-interval '0'
 set -g @resurrect-capture-pane-contents 'on'
 set -g @resurrect-processes 'ssh mysql psql sqlite3 htop top man less tail watch "~python" "~node"'
-set -g @resurrect-delete-backup-after '7'
-set-hook -g after-save-environment 'run-shell "ls -t ~/.tmux/resurrect/tmux_resurrect_*.txt 2>/dev/null | tail -n +21 | xargs rm -f"'
+run-shell -b ~/.tailscale/tmux-smart-backup.sh
 TMUX_EOF
 fi
 
