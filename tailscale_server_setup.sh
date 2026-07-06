@@ -25,7 +25,7 @@ SSH_MODE="${SSH_MODE:-termux}"       # 'termux' (default) or 'proot'
 DISTRO="${DISTRO:-ubuntu}"          # proot-distro name (only used when SSH_MODE=proot)
 SOCKS5_PORT="${SOCKS5_PORT:-1055}"  # fixed SOCKS5 port for reproducibility
 SSH_PORT="${SSH_PORT:-8022}"        # SSH port (Termux default: 8022, proot common: 2222)
-TS_HOSTNAME="${TS_HOSTNAME:-}"      # Tailscale hostname (optional)
+HOSTNAME="${HOSTNAME:-}"            # Tailscale hostname (optional)
 # ---------------------------------------------------------------------------
 
 BOLD="\033[1m"; RED="\033[31m"; GREEN="\033[32m"; YELLOW="\033[33m"; CYAN="\033[36m"; RESET="\033[0m"
@@ -50,14 +50,12 @@ read_interactive() {
 }
 
 # Determine Tailscale Hostname
-if [ -z "${TS_HOSTNAME}" ]; then
-    # Try using HOSTNAME env var, but ignore if it is empty, 'localhost', or '127.0.0.1'
-    if [ -n "${HOSTNAME:-}" ] && [ "${HOSTNAME}" != "localhost" ] && [ "${HOSTNAME}" != "127.0.0.1" ]; then
-        TS_HOSTNAME="${HOSTNAME}"
-    fi
+# Ignore default localhost/127.0.0.1 values set by Termux shell env
+if [ "${HOSTNAME}" = "localhost" ] || [ "${HOSTNAME}" = "127.0.0.1" ]; then
+    HOSTNAME=""
 fi
 
-if [ -z "${TS_HOSTNAME}" ]; then
+if [ -z "${HOSTNAME}" ]; then
     # Try to get Android model name, clean it up for Tailscale (alphanumeric and dashes only)
     MODEL=$(getprop ro.product.model 2>/dev/null | tr -cd '[:alnum:]-' | tr '[:upper:]' '[:lower:]' || echo "")
     if [ -n "$MODEL" ]; then
@@ -65,15 +63,15 @@ if [ -z "${TS_HOSTNAME}" ]; then
     else
         DEFAULT_HOSTNAME="termux-server-$(shuf -i 1000-9999 -n 1)"
     fi
-    info "No TS_HOSTNAME environment variable provided."
+    info "No HOSTNAME environment variable provided."
     read_interactive "Enter tailscale hostname to use (Press ENTER for default '$DEFAULT_HOSTNAME'): " USER_INPUT
     if [ -n "$USER_INPUT" ]; then
-        TS_HOSTNAME=$(echo "$USER_INPUT" | tr -cd '[:alnum:]-' | tr '[:upper:]' '[:lower:]')
+        HOSTNAME=$(echo "$USER_INPUT" | tr -cd '[:alnum:]-' | tr '[:upper:]' '[:lower:]')
     else
-        TS_HOSTNAME="$DEFAULT_HOSTNAME"
+        HOSTNAME="$DEFAULT_HOSTNAME"
     fi
 fi
-info "Using Tailscale hostname: $TS_HOSTNAME"
+info "Using Tailscale hostname: $HOSTNAME"
 
 # ════════════════════════════════════════════════════════════════════
 header "Step 1: Install dependencies in Termux"
@@ -166,10 +164,10 @@ echo ""
 echo -e "${YELLOW}You need to authenticate this device to your Tailnet.${RESET}"
 echo "Run the following command and open the printed URL in a browser:"
 echo ""
-echo -e "  ${BOLD}tailscale-cli up --hostname=$TS_HOSTNAME${RESET}"
+echo -e "  ${BOLD}tailscale-cli up --hostname=$HOSTNAME${RESET}"
 echo ""
 read_interactive "Press ENTER to run this now, or Ctrl-C to skip and run manually later..." DUMMY_VAR
-tailscale-cli up --hostname="$TS_HOSTNAME" || warn "If it timed out, re-run: tailscale-cli up --hostname=$TS_HOSTNAME"
+tailscale-cli up --hostname="$HOSTNAME" || warn "If it timed out, re-run: tailscale-cli up --hostname=$HOSTNAME"
 
 # ════════════════════════════════════════════════════════════════════
 header "Step 6: Install and configure SSH server (mode: $SSH_MODE)"
