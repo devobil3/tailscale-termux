@@ -640,9 +640,11 @@ done
 BACKUP_EOF
 chmod +x "$HOME/.tailscale/tmux-smart-backup.sh"
 
-if ! grep -q "tmux-resurrect/resurrect.tmux" "$TMUX_CONF" 2>/dev/null; then
-    info "Adding plugin configuration to $TMUX_CONF..."
-    cat >> "$TMUX_CONF" << 'TMUX_EOF'
+# Clean up any old configurations first, then append the clean block
+info "Updating plugin configuration in $TMUX_CONF..."
+sed -i '/tmux-resurrect/d; /tmux-continuum/d; /continuum-restore/d; /continuum-save-interval/d; /resurrect-capture-pane-contents/d; /resurrect-processes/d; /tmux-smart-backup.sh/d; /after-save-environment/d' "$TMUX_CONF" 2>/dev/null || true
+
+cat >> "$TMUX_CONF" << 'TMUX_EOF'
 
 # --- Tmux Resurrect & Continuum ---
 run-shell ~/.tmux/plugins/tmux-resurrect/resurrect.tmux
@@ -653,7 +655,6 @@ set -g @resurrect-capture-pane-contents 'on'
 set -g @resurrect-processes 'ssh mysql psql sqlite3 htop top man less tail watch "~python" "~node"'
 run-shell -b ~/.tailscale/tmux-smart-backup.sh
 TMUX_EOF
-fi
 
 # ════════════════════════════════════════════════════════════════════
 header "Step 11: Summary"
