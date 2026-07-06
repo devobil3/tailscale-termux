@@ -264,12 +264,13 @@ set -g status-left '#[fg=green][#S] '
 set -g status-right '#[fg=yellow]%Y-%m-%d %H:%M '
 
 # --- Tmux Resurrect & Continuum ---
-run-shell ~/.tmux/plugins/tmux-resurrect/resurrect.tmux
-run-shell ~/.tmux/plugins/tmux-continuum/continuum.tmux
 set -g @continuum-restore 'on'
 set -g @continuum-save-interval '0'
 set -g @resurrect-capture-pane-contents 'on'
 set -g @resurrect-processes 'ssh mysql psql sqlite3 htop top man less tail watch "~python" "~node"'
+
+run-shell ~/.tmux/plugins/tmux-resurrect/resurrect.tmux
+run-shell ~/.tmux/plugins/tmux-continuum/continuum.tmux
 run-shell -b ~/.tailscale/tmux-smart-backup.sh
 TMUX_EOF
             mkdir -p /root/.tmux/plugins
@@ -647,12 +648,13 @@ sed -i '/tmux-resurrect/d; /tmux-continuum/d; /continuum-restore/d; /continuum-s
 cat >> "$TMUX_CONF" << 'TMUX_EOF'
 
 # --- Tmux Resurrect & Continuum ---
-run-shell ~/.tmux/plugins/tmux-resurrect/resurrect.tmux
-run-shell ~/.tmux/plugins/tmux-continuum/continuum.tmux
 set -g @continuum-restore 'on'
 set -g @continuum-save-interval '0'
 set -g @resurrect-capture-pane-contents 'on'
 set -g @resurrect-processes 'ssh mysql psql sqlite3 htop top man less tail watch "~python" "~node"'
+
+run-shell ~/.tmux/plugins/tmux-resurrect/resurrect.tmux
+run-shell ~/.tmux/plugins/tmux-continuum/continuum.tmux
 run-shell -b ~/.tailscale/tmux-smart-backup.sh
 TMUX_EOF
 
