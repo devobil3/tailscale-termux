@@ -1,0 +1,140 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# Server registry manager for Tailscale multi-server SSH.
+
+REGISTRY="$HOME/.tailscale/servers.conf"
+mkdir -p "$HOME/.tailscale"
+touch "$REGISTRY"
+
+show_usage() {
+    echo "Usage: ts-servers <command> [args]"
+    echo ""
+    echo "Commands:"
+    echo "  list                                 List all registered servers"
+    echo "  add <name> <hostname> <user> <port>  Register a new server"
+    echo "  remove <name>                        Remove a registered server"
+    echo "  test [name]                          Test connectivity to server(s)"
+    exit 1
+}
+
+if [ $# -lt 1 ]; then
+    show_usage
+fi
+
+CMD="$1"
+shift
+
+case "$CMD" in
+    list)
+        if [ ! -s "$REGISTRY" ] || [ "$(grep -v '^#' "$REGISTRY" | wc -l)" -eq 0 ]; then
+            echo "No servers registered yet. Register one with:"
+            echo "  ts-servers add <name> <hostname> <user> <port>"
+            exit 0
+        fi
+        echo -e "NAME\t\tHOSTNAME\t\tUSER\t\tPORT"
+        echo -e "----\t\t--------\t\t----\t\t----"
+        grep -v '^#' "$REGISTRY" | while IFS='|' read -r name host user port; do
+            if [ -n "$name" ]; then
+                printf "%-15s %-22s %-15s %s\n" "$name" "$host" "$user" "$port"
+            fi
+        done
+        ;;
+    add)
+        if [ $# -lt 4 ]; then
+            echo "Error: Missing arguments."
+            echo "Usage: ts-servers add <name> <hostname> <user> <port>"
+            exit 1
+        fi
+        NAME=$(echo "$1" | tr -cd '[:alnum:]-' | tr '[:upper:]' '[:lower:]')
+        HOST=$(echo "$2" | tr -cd '[:alnum:]-' | tr '[:upper:]' '[:lower:]')
+        USER="$3"
+        PORT="$4"
+        
+        # Check if already exists
+        if grep -q "^$NAME|" "$REGISTRY" 2>/dev/null; then
+            echo "Error: A server with name '$NAME' is already registered."
+            exit 1
+        fi
+        
+        echo "$NAME|$HOST|$USER|$PORT" >> "$REGISTRY"
+        echo "Successfully registered server '$NAME' ($HOST) with user $USER on port $PORT."
+        ;;
+    remove)
+        if [ $# -lt 1 ]; then
+            echo "Error: Missing server name."
+            echo "Usage: ts-servers remove <name>"
+            exit 1
+        fi
+        NAME="$1"
+        if ! grep -q "^$NAME|" "$REGISTRY" 2>/dev/null; then
+            echo "Error: Server '$NAME' not found."
+            exit 1
+        fi
+        # Remove line
+        grep -v "^$NAME|" "$REGISTRY" > "${REGISTRY}.tmp" || true
+        mv "${REGISTRY}.tmp" "$REGISTRY"
+        echo "Successfully removed server '$NAME'."
+        ;;
+    test)
+        TARGET="${1:-}"
+        # Helper to test one server
+        test_one() {
+            local name="$1"
+            local host="$2"
+            local user="$3"
+            local port="$4"
+            
+            echo -n "Testing '$name' ($host)... "
+            # First find IP via tailscale status
+            local ip=$(tailscale-cli status 2>/dev/null | awk -v h="$host" '$2 == h { print $1; exit }')
+            if [ -z "$ip" ]; then
+                echo -e "\033[31m[OFFLINE]\033[0m (Could not resolve '$host' on Tailnet)"
+                return 1
+            fi
+            
+            # Read local socks proxy info
+            local socks_addr="127.0.0.1:1055"
+            local socks_file="$HOME/.tailscale/socks_addr"
+            if [ -f "$socks_file" ]; then
+                socks_addr=$(cat "$socks_file")
+            fi
+            
+            # Test port via SOCKS5 proxy command using nc
+            if nc -z -x "$socks_addr" -X 5 "$ip" "$port" 2>/dev/null; then
+                echo -e "\033[32m[ONLINE]\033[0m (IP: $ip, SSH port $port is reachable)"
+                return 0
+            else
+                # Try directly in case socks5 proxy is bypassed or failed
+                if nc -z -w 3 "$ip" "$port" 2>/dev/null; then
+                    echo -e "\033[33m[ONLINE - NO PROXY]\033[0m (IP: $ip, SOCKS5 failed but port reachable directly)"
+                    return 0
+                else
+                    echo -e "\033[31m[UNREACHABLE]\033[0m (IP: $ip, Port $port is closed or blocked)"
+                    return 1
+                fi
+            fi
+        }
+        
+        if [ -n "$TARGET" ]; then
+            LINE=$(grep "^$TARGET|" "$REGISTRY" 2>/dev/null || true)
+            if [ -z "$LINE" ]; then
+                echo "Error: Server '$TARGET' not found."
+                exit 1
+            fi
+            IFS='|' read -r name host user port <<< "$LINE"
+            test_one "$name" "$host" "$user" "$port"
+        else
+            if [ ! -s "$REGISTRY" ] || [ "$(grep -v '^#' "$REGISTRY" | wc -l)" -eq 0 ]; then
+                echo "No servers registered to test."
+                exit 0
+            fi
+            grep -v '^#' "$REGISTRY" | while IFS='|' read -r name host user port; do
+                if [ -n "$name" ]; then
+                    test_one "$name" "$host" "$user" "$port"
+                fi
+            done
+        fi
+        ;;
+    *)
+        show_usage
+        ;;
+esac

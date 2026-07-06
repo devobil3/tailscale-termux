@@ -1,0 +1,156 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# Session manager for remote tmux sessions across Tailscale servers.
+
+REGISTRY="$HOME/.tailscale/servers.conf"
+
+if [ ! -f "$REGISTRY" ] || [ ! -s "$REGISTRY" ]; then
+    echo "Error: No servers registered. Please register a server first using:"
+    echo "  ts-servers add <name> <hostname> <user> <port>"
+    exit 1
+fi
+
+show_usage() {
+    echo "Usage: ts-sessions <server_name|all> [kill <session_name>]"
+    echo ""
+    echo "Examples:"
+    echo "  ts-sessions all                  List active sessions on all registered servers"
+    echo "  ts-sessions phone-a              List active sessions on phone-a"
+    echo "  ts-sessions phone-a kill work    Kill session 'work' on phone-a"
+    exit 1
+}
+
+if [ $# -lt 1 ]; then
+    show_usage
+fi
+
+TARGET="$1"
+CMD="${2:-}"
+SESSION_NAME="${3:-}"
+
+# Load servers
+SERVERS=()
+HOSTS=()
+USERS=()
+PORTS=()
+while IFS='|' read -r name host user port; do
+    [[ "$name" =~ ^# ]] && continue
+    [ -z "$name" ] && continue
+    SERVERS+=("$name")
+    HOSTS+=("$host")
+    USERS+=("$user")
+    PORTS+=("$port")
+done < "$REGISTRY"
+
+list_sessions() {
+    local name="$1"
+    local host="$2"
+    local user="$3"
+    local port="$4"
+    local quiet="${5:-false}"
+    
+    # Resolve Tailscale IP
+    local ip=$(tailscale-cli status 2>/dev/null | awk -v h="$host" '$2 == h { print $1; exit }')
+    if [ -z "$ip" ]; then
+        [ "$quiet" = false ] && echo "Error: Could not resolve '$host' on Tailnet."
+        return 1
+    fi
+    
+    local socks_addr="127.0.0.1:1055"
+    local socks_file="$HOME/.tailscale/socks_addr"
+    if [ -f "$socks_file" ]; then
+        socks_addr=$(cat "$socks_file")
+    fi
+    local ph="${socks_addr%:*}"
+    local pp="${socks_addr#*:}"
+    
+    # Test if port reachable
+    if ! nc -z -x "$socks_addr" -X 5 "$ip" "$port" 2>/dev/null; then
+        [ "$quiet" = false ] && echo "$name ($host): offline/unreachable"
+        return 1
+    fi
+    
+    local sessions=$(ssh -p "$port" -o "ProxyCommand=nc -X 5 -x $ph:$pp %h %p" -o ConnectTimeout=5 "$user@$ip" "tmux list-sessions -F '#S|#{session_windows}|#{session_attached}' 2>/dev/null" || echo "")
+    
+    echo "$name ($host):"
+    if [ -z "$sessions" ]; then
+        echo "  (No active tmux sessions)"
+    else
+        while IFS='|' read -r s_name s_windows s_attached; do
+            if [ -n "$s_name" ]; then
+                local status="detached"
+                [ "$s_attached" -gt 0 ] && status="attached"
+                local win_word="window"
+                [ "$s_windows" -ne 1 ] && win_word="windows"
+                echo "  - $s_name ($s_windows $win_word, $status)"
+            fi
+        done <<< "$sessions"
+    fi
+    echo ""
+}
+
+kill_session() {
+    local name="$1"
+    local host="$2"
+    local user="$3"
+    local port="$4"
+    local session="$5"
+    
+    # Resolve Tailscale IP
+    local ip=$(tailscale-cli status 2>/dev/null | awk -v h="$host" '$2 == h { print $1; exit }')
+    if [ -z "$ip" ]; then
+        echo "Error: Could not resolve '$host' on Tailnet."
+        return 1
+    fi
+    
+    local socks_addr="127.0.0.1:1055"
+    local socks_file="$HOME/.tailscale/socks_addr"
+    if [ -f "$socks_file" ]; then
+        socks_addr=$(cat "$socks_file")
+    fi
+    local ph="${socks_addr%:*}"
+    local pp="${socks_addr#*:}"
+    
+    echo "Killing session '$session' on '$name' ($host)..."
+    ssh -p "$port" -o "ProxyCommand=nc -X 5 -x $ph:$pp %h %p" -o ConnectTimeout=5 "$user@$ip" "tmux kill-session -t $session 2>/dev/null"
+    if [ $? -eq 0 ]; then
+        echo "Successfully killed session '$session'."
+    else
+        echo "Error: Failed to kill session. Does it exist?"
+    fi
+}
+
+if [ "$TARGET" = "all" ]; then
+    if [ -n "$CMD" ]; then
+        echo "Error: Cannot run command '$CMD' on 'all' target."
+        exit 1
+    fi
+    for i in "${!SERVERS[@]}"; do
+        list_sessions "${SERVERS[$i]}" "${HOSTS[$i]}" "${USERS[$i]}" "${PORTS[$i]}" true
+    done
+else
+    # Find matching server
+    idx=-1
+    for i in "${!SERVERS[@]}"; do
+        if [ "${SERVERS[$i]}" = "$TARGET" ]; then
+            idx=$i
+            break
+        fi
+    done
+    if [ $idx -eq -1 ]; then
+        echo "Error: Server '$TARGET' not found."
+        exit 1
+    fi
+    
+    if [ "$CMD" = "kill" ]; then
+        if [ -z "$SESSION_NAME" ]; then
+            echo "Error: Session name required to kill."
+            exit 1
+        fi
+        kill_session "${SERVERS[$idx]}" "${HOSTS[$idx]}" "${USERS[$idx]}" "${PORTS[$idx]}" "$SESSION_NAME"
+    elif [ -n "$CMD" ]; then
+        echo "Error: Unknown command '$CMD'."
+        show_usage
+    else
+        list_sessions "${SERVERS[$idx]}" "${HOSTS[$idx]}" "${USERS[$idx]}" "${PORTS[$idx]}" false
+    fi
+fi

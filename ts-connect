@@ -1,0 +1,233 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# Unified connector for Tailscale multi-server SSH with tmux support.
+
+REGISTRY="$HOME/.tailscale/servers.conf"
+
+if [ ! -f "$REGISTRY" ] || [ ! -s "$REGISTRY" ]; then
+    echo "Error: No servers registered. Please register a server first using:"
+    echo "  ts-servers add <name> <hostname> <user> <port>"
+    exit 1
+fi
+
+# Load servers into arrays
+SERVERS=()
+HOSTS=()
+USERS=()
+PORTS=()
+count=0
+
+while IFS='|' read -r name host user port; do
+    # Skip comments and empty lines
+    [[ "$name" =~ ^# ]] && continue
+    [ -z "$name" ] && continue
+    SERVERS+=("$name")
+    HOSTS+=("$host")
+    USERS+=("$user")
+    PORTS+=("$port")
+    ((count++))
+done < "$REGISTRY"
+
+select_server() {
+    echo "Select a server to connect:"
+    for i in "${!SERVERS[@]}"; do
+        echo "  $((i+1))) ${SERVERS[$i]} (${HOSTS[$i]})"
+    done
+    read -rp "Choice [1-$count]: " choice
+    if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "$count" ]; then
+        SERVER_INDEX=$((choice-1))
+    else
+        echo "Invalid choice."
+        exit 1
+    fi
+}
+
+SERVER_NAME=""
+SESSION_NAME=""
+MODE="tmux" # 'tmux' or 'plain'
+CREATE_NEW=false
+
+# Parse arguments
+if [ $# -eq 0 ]; then
+    select_server
+    SERVER_NAME="${SERVERS[$SERVER_INDEX]}"
+else
+    # Find matching server name
+    SERVER_NAME="$1"
+    SERVER_INDEX=-1
+    for i in "${!SERVERS[@]}"; do
+        if [ "${SERVERS[$i]}" = "$SERVER_NAME" ]; then
+            SERVER_INDEX=$i
+            break
+        fi
+    done
+    if [ "$SERVER_INDEX" -eq -1 ]; then
+        echo "Error: Server '$SERVER_NAME' not found in registry."
+        exit 1
+    fi
+    shift
+fi
+
+# Extract profile details
+HOST="${HOSTS[$SERVER_INDEX]}"
+USER="${USERS[$SERVER_INDEX]}"
+PORT="${PORTS[$SERVER_INDEX]}"
+
+# Parse remaining arguments
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --plain)
+            MODE="plain"
+            shift
+            ;;
+        --new)
+            CREATE_NEW=true
+            if [ $# -lt 2 ]; then
+                echo "Error: --new requires a session name."
+                exit 1
+            fi
+            SESSION_NAME="$2"
+            shift 2
+            ;;
+        *)
+            SESSION_NAME="$1"
+            shift
+            ;;
+    esac
+done
+
+# Resolve Tailscale IP
+echo "Resolving IP for $HOST on Tailnet..."
+IP=$(tailscale-cli status 2>/dev/null | awk -v h="$HOST" '$2 == h { print $1; exit }')
+if [ -z "$IP" ]; then
+    echo "Error: Could not resolve '$HOST' on Tailnet. Is the server online and authenticated?"
+    exit 1
+fi
+
+socks_addr="127.0.0.1:1055"
+socks_file="$HOME/.tailscale/socks_addr"
+if [ -f "$socks_file" ]; then
+    socks_addr=$(cat "$socks_file")
+fi
+
+PROXY_HOST="${socks_addr%:*}"
+PROXY_PORT="${socks_addr#*:}"
+
+# Connection command builder
+run_ssh() {
+    local cmd="$1"
+    if [ -n "$cmd" ]; then
+        ssh -t -p "$PORT" \
+            -o "ProxyCommand=nc -X 5 -x $PROXY_HOST:$PROXY_PORT %h %p" \
+            -o StrictHostKeyChecking=accept-new \
+            -o ConnectTimeout=10 \
+            "$USER@$IP" "$cmd"
+    else
+        ssh -p "$PORT" \
+            -o "ProxyCommand=nc -X 5 -x $PROXY_HOST:$PROXY_PORT %h %p" \
+            -o StrictHostKeyChecking=accept-new \
+            -o ConnectTimeout=10 \
+            "$USER@$IP"
+    fi
+}
+
+if [ "$MODE" = "plain" ]; then
+    echo "Connecting to $USER@$IP ($SERVER_NAME) in plain mode..."
+    run_ssh ""
+    exit 0
+fi
+
+# Check if remote has tmux
+echo "Checking remote tmux installation..."
+HAS_TMUX=$(ssh -p "$PORT" -o "ProxyCommand=nc -X 5 -x $PROXY_HOST:$PROXY_PORT %h %p" -o ConnectTimeout=5 "$USER@$IP" "command -v tmux &>/dev/null && echo yes || echo no" 2>/dev/null || echo "timeout")
+
+if [ "$HAS_TMUX" = "timeout" ]; then
+    echo "Error: Connection timed out or server unreachable."
+    exit 1
+elif [ "$HAS_TMUX" != "yes" ]; then
+    echo "Warning: tmux is not installed on the remote server '$SERVER_NAME'."
+    read -rp "Connect in plain SSH mode instead? [Y/n] " answer
+    if [[ "$answer" =~ ^[Nn] ]]; then
+        exit 0
+    else
+        run_ssh ""
+        exit 0
+    fi
+fi
+
+# If a session name is provided directly or via --new
+if [ -n "$SESSION_NAME" ]; then
+    if [ "$CREATE_NEW" = true ]; then
+        echo "Creating and attaching to new tmux session '$SESSION_NAME'..."
+        run_ssh "tmux new-session -A -s $SESSION_NAME"
+    else
+        echo "Attaching to or creating tmux session '$SESSION_NAME'..."
+        run_ssh "tmux attach-session -t $SESSION_NAME || tmux new-session -s $SESSION_NAME"
+    fi
+    exit 0
+fi
+
+# Session picker: query active tmux sessions on remote
+echo "Retrieving active tmux sessions on '$SERVER_NAME'..."
+SESSIONS_RAW=$(ssh -p "$PORT" -o "ProxyCommand=nc -X 5 -x $PROXY_HOST:$PROXY_PORT %h %p" -o ConnectTimeout=5 "$USER@$IP" "tmux list-sessions -F '#S|#{session_windows}|#{session_attached}' 2>/dev/null" || echo "")
+
+# Parse sessions
+ACTIVE_SESSIONS=()
+WINDOW_COUNTS=()
+ATTACHED_STATUS=()
+s_count=0
+
+if [ -n "$SESSIONS_RAW" ]; then
+    while IFS='|' read -r s_name s_windows s_attached; do
+        if [ -n "$s_name" ]; then
+            ACTIVE_SESSIONS+=("$s_name")
+            WINDOW_COUNTS+=("$s_windows")
+            ATTACHED_STATUS+=("$s_attached")
+            ((s_count++))
+        fi
+    done <<< "$SESSIONS_RAW"
+fi
+
+echo ""
+echo "Active tmux sessions on '$SERVER_NAME':"
+if [ $s_count -eq 0 ]; then
+    echo "  (No active sessions found)"
+else
+    for i in "${!ACTIVE_SESSIONS[@]}"; do
+        status="detached"
+        [ "${ATTACHED_STATUS[$i]}" -gt 0 ] && status="attached"
+        win_word="window"
+        [ "${WINDOW_COUNTS[$i]}" -ne 1 ] && win_word="windows"
+        echo "  $((i+1))) ${ACTIVE_SESSIONS[$i]} (${WINDOW_COUNTS[$i]} $win_word, $status)"
+    done
+fi
+echo "  $((s_count+1))) [+ Create new session]"
+echo "  $((s_count+2))) [Plain SSH session (no tmux)]"
+echo ""
+
+read -rp "Choice [1-$((s_count+2))]: " s_choice
+
+if [[ "$s_choice" =~ ^[0-9]+$ ]]; then
+    if [ "$s_choice" -ge 1 ] && [ "$s_choice" -le "$s_count" ]; then
+        # Picked existing
+        SELECTED_SESSION="${ACTIVE_SESSIONS[$((s_choice-1))]}"
+        echo "Attaching to session '$SELECTED_SESSION'..."
+        run_ssh "tmux attach-session -t $SELECTED_SESSION"
+    elif [ "$s_choice" -eq "$((s_count+1))" ]; then
+        # Create new
+        read -rp "Enter new session name [default: main]: " new_name
+        new_name="${new_name:-main}"
+        new_name=$(echo "$new_name" | tr -cd '[:alnum:]_-')
+        echo "Starting session '$new_name'..."
+        run_ssh "tmux new-session -A -s $new_name"
+    elif [ "$s_choice" -eq "$((s_count+2))" ]; then
+        # Plain
+        echo "Connecting in plain mode..."
+        run_ssh ""
+    else
+        echo "Invalid choice."
+        exit 1
+    fi
+else
+    echo "Invalid choice."
+    exit 1
+fi
