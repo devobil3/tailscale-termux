@@ -42,71 +42,31 @@ if [ -f "$REGISTRY" ]; then
     done < "$REGISTRY"
 fi
 
-# Auto-detect active Tailscale servers using SSH banner metadata
+# Auto-detect active Tailscale servers
 echo "Scanning Tailnet for auto-detected servers..."
 local_ip=$(tailscale-cli ip -4 2>/dev/null | head -1 || echo "")
-socks_addr="127.0.0.1:1055"
-socks_file="$HOME/.tailscale/socks_addr"
-if [ -f "$socks_file" ]; then
-    socks_addr=$(cat "$socks_file")
-fi
-PROXY_HOST="${socks_addr%:*}"
-PROXY_PORT="${socks_addr#*:}"
 
-active_nodes=()
 while read -r ip host owner os status_val info; do
     [ -z "$ip" ] && continue
     [ "$ip" = "$local_ip" ] && continue
     [[ "$status_val" =~ offline ]] && continue
-    active_nodes+=("$host|$ip")
-done < <(tailscale-cli status 2>/dev/null || true)
-
-if [ ${#active_nodes[@]} -gt 0 ]; then
-    tmp_file=$(mktemp)
-    for node in "${active_nodes[@]}"; do
-        IFS='|' read -r host ip <<< "$node"
-        for port in 8022 2222 22; do
-            (
-                if nc -z -x "$PROXY_HOST:$PROXY_PORT" -X 5 -w 1 "$ip" "$port" &>/dev/null || nc -z -w 1 "$ip" "$port" &>/dev/null; then
-                    banner_out=$(ssh -p "$port" \
-                        -o "ProxyCommand=nc -X 5 -x $PROXY_HOST:$PROXY_PORT %h %p" \
-                        -o StrictHostKeyChecking=accept-new \
-                        -o ConnectTimeout=2 \
-                        -o PreferredAuthentications=none \
-                        -o UserKnownHostsFile=/dev/null \
-                        "probe@$ip" 2>&1 || true)
-                    if [[ "$banner_out" =~ \[TS-SSH\][[:space:]]+user=([^[:space:]]+)[[:space:]]+port=([0-9]+) ]]; then
-                        echo "DETECTED|$host|$ip|${BASH_REMATCH[1]}|${BASH_REMATCH[2]}" >> "$tmp_file"
-                    fi
-                fi
-            ) &
-        done
-    done
-    wait
     
-    if [ -f "$tmp_file" ]; then
-        while IFS='|' read -r status_tag d_host d_ip d_user d_port; do
-            if [ "$status_tag" = "DETECTED" ]; then
-                # Avoid duplicates
-                exists=false
-                for s in "${SERVERS[@]}"; do
-                    if [ "$s" = "$d_host" ]; then
-                        exists=true
-                        break
-                    fi
-                done
-                if [ "$exists" = false ]; then
-                    SERVERS+=("$d_host")
-                    HOSTS+=("$d_ip")
-                    USERS+=("$d_user")
-                    PORTS+=("$d_port")
-                    ((count++))
-                fi
-            fi
-        done < "$tmp_file"
-        rm -f "$tmp_file"
-    fi
-fi
+    # Skip if already in manual registry
+    exists=false
+    for s in "${SERVERS[@]}"; do
+        if [ "$s" = "$host" ]; then
+            exists=true
+            break
+        fi
+    done
+    [ "$exists" = true ] && continue
+    
+    SERVERS+=("$host")
+    HOSTS+=("$ip")
+    USERS+=("$(whoami)")
+    PORTS+=("8022")
+    ((count++))
+done < <(tailscale-cli status 2>/dev/null || true)
 
 if [ "$count" -eq 0 ]; then
     echo "Error: No servers registered or auto-detected on Tailnet. Please register a server first using:"
