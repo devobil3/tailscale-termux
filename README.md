@@ -326,16 +326,18 @@ The setup script `tailscale_server_setup.sh` offers to configure auto-start auto
 Using `termux-services` (runit supervisor), services are started automatically in the background whenever you open a Termux session.
 
 ```bash
-# Enable Tailscale and native SSH daemon
+# Enable Tailscale, native SSH daemon, and Wake Lock
 sv-enable tailscaled
 sv-enable sshd
+sv-enable wake-lock
 
 # Or for proot-distro SSH mode:
 sv-enable tailscaled
 sv-enable proot-sshd
+sv-enable wake-lock
 
 # Check status of the services
-sv status tailscaled sshd
+sv status tailscaled sshd wake-lock
 ```
 
 ### 2 — Auto-Start on Phone Restart (Termux:Boot)

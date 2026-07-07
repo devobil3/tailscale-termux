@@ -463,6 +463,21 @@ if [[ -z "$AUTO_START_CHOICE" || "$AUTO_START_CHOICE" =~ ^[Yy] ]]; then
         info "Enabling tailscaled in termux-services..."
         sv-enable tailscaled || warn "Failed to enable tailscaled service"
 
+        info "Setting up custom wake-lock service in termux-services..."
+        WAKE_LOCK_SERVICE_DIR="$PREFIX/var/service/wake-lock"
+        mkdir -p "$WAKE_LOCK_SERVICE_DIR"
+        cat > "$WAKE_LOCK_SERVICE_DIR/run" <<'WAKE_LOCK_EOF'
+#!/data/data/com.termux/files/usr/bin/sh
+# Acquire the Termux wake lock to prevent CPU from sleeping
+termux-wake-lock
+# Block indefinitely to prevent runit from restarting the service
+exec sleep 99999d
+WAKE_LOCK_EOF
+        chmod +x "$WAKE_LOCK_SERVICE_DIR/run"
+
+        info "Enabling wake-lock service in termux-services..."
+        sv-enable wake-lock || warn "Failed to enable wake-lock service"
+
         if [ "$SSH_MODE" = "termux" ]; then
             info "Enabling native sshd in termux-services..."
             sv-enable sshd || warn "Failed to enable sshd service"
