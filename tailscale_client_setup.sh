@@ -77,6 +77,9 @@ else
         "$PREFIX/bin/tailscaled-start" \
         "$PREFIX/bin/tailscaled-stop" 2>/dev/null || true
 
+    info "Patching tailscaled-start to fix pgrep self-matching bug..."
+    sed -i 's/pgrep -f "tailscaled/pgrep -f "[t]ailscaled/g' "$PREFIX/bin/tailscaled-start" 2>/dev/null || true
+
     success "Tailscale installed."
 fi
 
@@ -102,7 +105,7 @@ info "Starting tailscaled..."
 tailscaled-start
 sleep 2
 
-if pgrep -f "tailscaled.*statedir" &>/dev/null; then
+if pgrep -f "[t]ailscaled.*statedir" &>/dev/null; then
     success "tailscaled is running. SOCKS5 at 127.0.0.1:$SOCKS5_PORT"
 else
     die "tailscaled failed to start. Check: cat ~/.tailscale/tailscaled.log"

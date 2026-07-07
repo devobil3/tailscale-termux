@@ -127,6 +127,9 @@ else
         "$PREFIX/bin/tailscaled-log" \
         "$PREFIX/bin/tailscaled-start" \
         "$PREFIX/bin/tailscaled-stop" 2>/dev/null || true
+
+    info "Patching tailscaled-start to fix pgrep self-matching bug..."
+    sed -i 's/pgrep -f "tailscaled/pgrep -f "[t]ailscaled/g' "$PREFIX/bin/tailscaled-start" 2>/dev/null || true
 fi
 
 success "Tailscale binaries ready."
@@ -151,7 +154,7 @@ sleep 1
 tailscaled-start
 sleep 2
 
-if pgrep -f "tailscaled.*statedir" &>/dev/null; then
+if pgrep -f "[t]ailscaled.*statedir" &>/dev/null; then
     success "tailscaled is running. SOCKS5 at 127.0.0.1:$SOCKS5_PORT"
 else
     die "tailscaled failed to start. Check logs: cat ~/.tailscale/tailscaled.log"
@@ -384,7 +387,7 @@ if [ "$SSH_MODE" = "termux" ]; then
 SSH_PORT="${SSH_PORT}"
 LOG="\$HOME/.tailscale/termux-sshd.log"
 
-if pgrep -f "sshd" &>/dev/null; then
+if pgrep -f "[s]shd" &>/dev/null; then
     echo "sshd is already running."
     exit 0
 fi
@@ -396,7 +399,7 @@ echo "Starting Termux sshd on port \$SSH_PORT..."
 nohup sshd -D -p "\$SSH_PORT" >> "\$LOG" 2>&1 &
 sleep 2
 
-if pgrep -f "sshd" &>/dev/null; then
+if pgrep -f "[s]shd" &>/dev/null; then
     TS_IP=\$(tailscale-cli ip -4 2>/dev/null | head -1 || echo "<tailscale-ip>")
     WHOAMI=\$(whoami)
     echo "sshd running. SSH in from Android B:"
@@ -419,7 +422,7 @@ DISTRO="${DISTRO}"
 SSH_PORT="${SSH_PORT}"
 LOG="\$HOME/.tailscale/proot-sshd.log"
 
-if pgrep -f "sshd -D" &>/dev/null; then
+if pgrep -f "[s]shd -D" &>/dev/null; then
     echo "sshd is already running."
     exit 0
 fi
@@ -430,7 +433,7 @@ echo "Starting sshd inside \$DISTRO on port \$SSH_PORT..."
 nohup proot-distro login "\$DISTRO" -- /usr/sbin/sshd -D -p "\$SSH_PORT" >> "\$LOG" 2>&1 &
 sleep 2
 
-if pgrep -f "sshd -D" &>/dev/null; then
+if pgrep -f "[s]shd -D" &>/dev/null; then
     TS_IP=\$(tailscale-cli ip -4 2>/dev/null | head -1 || echo "<tailscale-ip>")
     echo "sshd running. SSH in from Android B:"
     echo "  ssh -p \$SSH_PORT root@\$TS_IP"
