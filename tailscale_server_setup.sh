@@ -481,6 +481,49 @@ WAKE_LOCK_EOF
         info "Enabling wake-lock service in termux-services..."
         sv-enable wake-lock || warn "Failed to enable wake-lock service"
 
+        info "Setting up tailscaled-watchdog service in termux-services..."
+        WATCHDOG_SERVICE_DIR="$PREFIX/var/service/tailscaled-watchdog"
+        mkdir -p "$WATCHDOG_SERVICE_DIR"
+        cat > "$WATCHDOG_SERVICE_DIR/run" <<'WATCHDOG_EOF'
+#!/data/data/com.termux/files/usr/bin/sh
+exec 2>&1
+
+STATE_DIR="$HOME/.tailscale"
+LOG_FILE="$STATE_DIR/watchdog.log"
+INTERVAL=60
+
+# Wait for system to settle on boot
+sleep 15
+
+while true; do
+    if ! pgrep -f "[t]ailscaled.*statedir" >/dev/null; then
+        echo "$(date): tailscaled process not found. Restarting..." >> "$LOG_FILE"
+        rm -f "$STATE_DIR/tailscaled.sock"
+        if sv status tailscaled >/dev/null 2>&1; then
+            sv restart tailscaled >> "$LOG_FILE" 2>&1
+        else
+            tailscaled-start >> "$LOG_FILE" 2>&1
+        fi
+    else
+        if ! tailscale-cli status >/dev/null 2>&1 || [ -z "$(tailscale-cli ip -4 2>/dev/null)" ]; then
+            echo "$(date): tailscale-cli connection failed or device offline. Restarting..." >> "$LOG_FILE"
+            pkill -9 -f tailscaled
+            rm -f "$STATE_DIR/tailscaled.sock"
+            if sv status tailscaled >/dev/null 2>&1; then
+                sv restart tailscaled >> "$LOG_FILE" 2>&1
+            else
+                tailscaled-start >> "$LOG_FILE" 2>&1
+            fi
+        fi
+    fi
+    sleep "$INTERVAL"
+done
+WATCHDOG_EOF
+        chmod +x "$WATCHDOG_SERVICE_DIR/run"
+
+        info "Enabling tailscaled-watchdog service in termux-services..."
+        sv-enable tailscaled-watchdog || warn "Failed to enable tailscaled-watchdog service"
+
         if [ "$SSH_MODE" = "termux" ]; then
             info "Enabling native sshd in termux-services..."
             sv-enable sshd || warn "Failed to enable sshd service"
