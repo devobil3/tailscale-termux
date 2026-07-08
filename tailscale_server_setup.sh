@@ -505,8 +505,19 @@ while true; do
             tailscaled-start >> "$LOG_FILE" 2>&1
         fi
     else
-        if ! tailscale-cli status >/dev/null 2>&1 || [ -z "$(tailscale-cli ip -4 2>/dev/null)" ]; then
-            echo "$(date): tailscale-cli connection failed or device offline. Restarting..." >> "$LOG_FILE"
+        LOCAL_IP=$(tailscale-cli ip -4 2>/dev/null || echo "")
+
+        if ! tailscale-cli status >/dev/null 2>&1; then
+            echo "$(date): tailscale-cli connection failed. Restarting..." >> "$LOG_FILE"
+            pkill -9 -f tailscaled
+            rm -f "$STATE_DIR/tailscaled.sock"
+            if sv status tailscaled >/dev/null 2>&1; then
+                sv restart tailscaled >> "$LOG_FILE" 2>&1
+            else
+                tailscaled-start >> "$LOG_FILE" 2>&1
+            fi
+        elif [ -n "$LOCAL_IP" ] && (tailscale-cli status 2>&1 | grep "^$LOCAL_IP" | grep -q "offline" || tailscale-cli status 2>&1 | grep -q "Tailscale is offline"); then
+            echo "$(date): local machine is offline. Restarting..." >> "$LOG_FILE"
             pkill -9 -f tailscaled
             rm -f "$STATE_DIR/tailscaled.sock"
             if sv status tailscaled >/dev/null 2>&1; then
